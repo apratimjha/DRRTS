@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:latest
+    container_name: drrts-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    command: [ "mongod", "--replSet", "rs0", "--bind_ip_all" ]
+    healthcheck:
+      test: echo "try { rs.status() } catch (err) { rs.initiate({_id:'rs0',members:[{_id:0,host:'mongodb:27017'}]}) }" | mongosh --quiet
+      interval: 5s
+      timeout: 30s
+      start_period: 0s
+      retries: 30
+
+  neo4j:
+    image: neo4j:latest
+    container_name: drrts-neo4j
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      NEO4J_AUTH: neo4j/testpassword
+    volumes:
+      - neo4j_data:/data
+
+  ai_engine:
+    build: ./ai_engine
+    container_name: drrts-ai
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./ai_engine:/app
+    command: uvicorn optimizer:app --host 0.0.0.0 --port 8000 --reload
+
+  server:
+    build: ./server
+    container_name: drrts-server
+    ports:
+      - "5000:5000"
+    environment:
+      - MONGO_URI=mongodb://mongodb:27017/drrts?replicaSet=rs0
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=testpassword
+      - AI_ENGINE_URL=http://ai_engine:8000
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      neo4j:
+        condition: service_started
+      ai_engine:
+        condition: service_started
+    volumes:
+      - ./server:/app
+      - /app/node_modules
+    restart: on-failure
+
+  client:
+    build: ./client
+    container_name: drrts-client
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_URL=http://localhost:5000
+      - CHOKIDAR_USEPOLLING=true
+    depends_on:
+      - server
+    volumes:
+      - ./client:/app
+      - /app/node_modules
+
+volumes:
+  mongo_data:
+  neo4j_data:
